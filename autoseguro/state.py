@@ -61,9 +61,10 @@ class ConversationState(TypedDict):
     handoff_reason: HandoffReason | None
     next_action: TurnAction | None
 
-    # Inputs for the current turn; consumed by the ingest node.
     pending_patch: LeadPatch | None
     handoff_requested: bool
+
+    quote_flow_active: bool
 
 
 def new_conversation_state() -> ConversationState:
@@ -84,6 +85,7 @@ def new_conversation_state() -> ConversationState:
         next_action=None,
         pending_patch=None,
         handoff_requested=False,
+        quote_flow_active=False,
     )
 
 
@@ -103,7 +105,6 @@ def apply_lead_patch(
         "qualification": None,
     }
 
-    # Every LeadProfile field can affect a quote or its conditions.
     if state["quote_status"] != QuoteStatus.NOT_REQUESTED:
         update.update(
             quote_id=None,
