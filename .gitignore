@@ -5,20 +5,33 @@ __pycache__/
 venv/
 .uv/
 *.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
 
-# env / secrets (NUNCA commitar)
+# Environment and credentials
 .env
 .env.*
+!.env.example
 *.key
 *.pem
 
-# OS / editores
-.DS_Store
-.idea/
-.vscode/
-*.log
-
-# ...mas os logs de IA são entregável — ver README (Transparência de uso de IA)
-!ai-logs/**
+# Local operational output
 /logs/
 /local_data/
+*.log
+*.sqlite
+*.sqlite3
+
+# OS and editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# AI development logs are a required deliverable.
+!ai-logs/**

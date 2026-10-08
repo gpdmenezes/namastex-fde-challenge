@@ -1,135 +1,422 @@
-# Desafio Técnico — FDE / AI Engineer (Namastex)
 
-Bem-vindo(a)! Este é um teste **take-home** que espelha o trabalho real de um FDE
-(Forward Deployed Engineer) na Namastex: subir um **agente de verdade**, conectado a
-sistemas que nem sempre colaboram, em cima de **dados bagunçados do mundo real**.
+# AutoSeguro — Agente de Cotação de Seguros com IA
 
-> ⏱️ **Tempo:** ~3 dias de relógio. **Espera-se que você use AI coding tools**
-> (Claude Code, Cursor, ChatGPT, etc.) — isso é a régua aqui, não trapaça. A gente quer ver
-> você orquestrando IA pra entregar com qualidade e velocidade.
->
-> 📎 Por isso mesmo: **as conversas que você teve com as IAs fazem parte da entrega.**
-> Veja [Transparência de uso de IA](#transparência-de-uso-de-ia-obrigatório) — é obrigatório.
+Agente conversacional de cotação de seguros automotivos desenvolvido para o [Namastex FDE / AI Engineer Challenge](https://github.com/namastexlabs/namastex-fde-challenge).
 
----
+A solução demonstra a integração de um LLM com uma API de cotação deliberadamente instável, mantendo as decisões de negócio determinísticas, testáveis e auditáveis.
 
-## O cenário
+## Principais funcionalidades
 
-Você é o engenheiro responsável por uma seguradora fictícia, a **AutoSeguro**. O time
-de vendas atende leads por **WhatsApp** e fecha seguro de **veículo**. Sua missão é
-construir um **agente** que:
+- Coleta conversacional de informações do cliente em múltiplos turnos.
+- Extração semântica estruturada utilizando OpenAI e Pydantic.
+- Qualificação determinística e roteamento do workflow com LangGraph.
+- Cotações reais obtidas exclusivamente pelo endpoint `POST /quote`.
+- Retries limitados, tratamento de timeouts e classificação explícita de erros.
+- Invalidação de cotações quando informações relevantes do cliente são alteradas.
+- Decisões de handoff humano com códigos de motivo explícitos.
+- Logs operacionais estruturados em JSONL e evidências de execução.
+- Testes automatizados com dependências HTTP e LLM simuladas.
 
-1. **Conversa** com o lead, qualifica e **cota um plano** usando a nossa API de cotação.
-2. **Decide** quando consegue resolver sozinho e quando precisa **passar pra um humano**.
-3. Não trava nem inventa preço quando a infraestrutura falha.
+## Arquitetura
 
-Te entregamos três coisas (tudo neste repo):
-
-| Insumo | Onde | O que é |
-|---|---|---|
-| **API de cotação** | `quote-service/` | Serviço HTTP `POST /quote` que você sobe local com Docker |
-| **Histórico de conversas** | `dataset/conversations.parquet` | ~2.500 conversas reais* lead↔vendedor (*sintéticas, ver dicionário) |
-| **Dicionário de dados** | `dataset/DICIONARIO.md` | Esquema do dataset |
-
----
-
-## Subindo a API de cotação
-
-```bash
-docker compose up --build
-# API em http://localhost:8000
+```text
+Usuário (CLI)
+    |
+    v
+Extração estruturada com OpenAI
+    |  Intenção + campos validados
+    v
+ConversationService
+    |
+    v
+LangGraph (determinístico)
+    |
+    +-- Incorporação incremental de informações
+    |
+    +-- Qualificação
+    |     |
+    |     +-- Dados ausentes/inválidos -> Solicitar esclarecimento
+    |     |
+    |     +-- Catálogo indisponível -> Consultar catálogo
+    |     |
+    |     +-- Dados suficientes -> Solicitar cotação
+    |
+    +-- QuoteClient (httpx)
+    |     |
+    |     +-- POST /quote
+    |     +-- Timeouts e retries limitados
+    |     +-- Validação e classificação tipada de respostas
+    |
+    +-- Sucesso -> Apresentação determinística da cotação
+    +-- Recusa comercial -> Explicação da recusa
+    +-- Falha técnica -> Registro de handoff
+    +-- Pedido explícito de humano -> Registro de handoff
+    |
+    v
+Auditoria operacional estruturada
 ```
 
-Sem Docker? Dá pra rodar direto:
+O LLM interpreta a linguagem do usuário, mas não calcula preços, aprova clientes, executa retries ou define políticas de handoff.
 
-```bash
-cd quote-service && uv run uvicorn app.main:app --port 8000
+As informações comerciais são apresentadas exclusivamente a partir das respostas validadas do serviço de cotação.
+
+Consulte o documento de [Decisões Arquiteturais](docs/architecture-decisions.md).
+
+## Requisitos
+
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/)
+- Docker Desktop com Docker Compose
+- Acesso à API da OpenAI e variável `OPENAI_API_KEY`
+- Windows PowerShell para executar os comandos abaixo
+
+Não é necessária a instalação global de pacotes Python.
+
+## Configuração e execução
+
+### 1. Instalar as dependências
+
+Na raiz do repositório:
+
+```powershell
+uv sync --locked --dev
 ```
 
-Endpoints:
+As dependências e suas versões resolvidas estão registradas em `pyproject.toml` e `uv.lock`.
 
-- `GET  /health` — health check
-- `GET  /planos` — tabela de planos **e as regras de cotação** (leia com atenção)
-- `POST /quote` — calcula a cotação
+### 2. Configurar a OpenAI
 
-Exemplo:
+Copie o arquivo de exemplo:
 
-```bash
-curl -X POST localhost:8000/quote -H 'content-type: application/json' \
-  -d '{"plano_id":"completo","idade":35,"veiculo_ano":2022,"cep":"01310-100","data_inicio":"2026-07-15"}'
+```powershell
+Copy-Item .env.example .env
 ```
 
-> ⚠️ **Aviso de operação:** a `/quote` simula um sistema legado real — ela **não responde
-> de primeira toda vez** (falhas e lentidão acontecem). Seu agente precisa lidar com isso
-> de forma elegante. Tratar bem a instabilidade é parte central do desafio.
+Edite o arquivo `.env` localmente e configure `OPENAI_API_KEY`.
 
----
+A aplicação obtém `OPENAI_API_KEY` exclusivamente das variáveis de ambiente do processo. Ela não carrega arquivos `.env` automaticamente.
 
-## O que entregar
+Os comandos abaixo utilizam `uv --env-file` para carregar explicitamente o arquivo `.env`.
 
-1. **Um agente** que atende um lead de ponta a ponta: conversa → qualifica → cota → decide
-   (resolve ou encaminha pro humano, com critério claro).
-2. **Repositório público no GitHub** com o código.
-3. **README** explicando como rodar e **as decisões que você tomou** (e por quê).
-4. **Log de uma execução completa** (uma conversa do início ao fim, com a cotação saindo).
-5. **As suas conversas com as IAs**, exportadas dentro do repo — ver a seção abaixo.
+Como alternativa, utilize uma variável de ambiente já configurada na sessão PowerShell e omita `--env-file .env`.
 
-Você pode usar o dataset de conversas como bem entender (ex.: few-shot, avaliação,
-entender padrões de objeção, testar seu agente). Use o que fizer sentido pra sua solução.
+Nunca inclua `.env`, chaves de API ou outras credenciais em commits.
 
----
+### 3. Iniciar o serviço de cotação
 
-## Transparência de uso de IA (obrigatório)
+Certifique-se de que o Docker Desktop esteja em execução:
 
-A gente **quer** que você use IA — e faz parte da entrega mostrar o processo, não só o
-resultado final. Esses logs **entram na avaliação** junto com o código.
+```powershell
+docker compose up -d --build
+docker compose ps
+```
 
-**Exporte todas as conversas que você teve com IAs durante o desafio** — ChatGPT,
-Claude Code, Cursor, Copilot Chat, Gemini, o que tiver usado — e **inclua no repo**,
-numa pasta `ai-logs/`.
+Verifique o serviço:
 
-Como exportar, por ferramenta:
+```powershell
+Invoke-RestMethod http://localhost:8000/health
+```
 
-| Ferramenta | Como |
+A API disponibiliza os seguintes endpoints:
+
+| Endpoint | Responsabilidade |
 |---|---|
-| **ChatGPT** | Menu da conversa → *Share* (link público) ou *Export*. Cole o link ou salve o arquivo |
-| **Claude.ai** | Menu da conversa → *Share* ou *Export* |
-| **Claude Code** | As sessões ficam em `~/.claude/projects/<slug-do-projeto>/*.jsonl` — copie os arquivos |
-| **Codex CLI** | Sessões em `~/.codex/sessions/` |
-| **Cursor / Windsurf** | Exporte ou copie o histórico do painel de chat pra um `.md` |
-| **Copilot Chat / outros** | Copie e cole num `.md` mesmo — serve |
+| `GET /health` | Verificação básica de disponibilidade |
+| `GET /planos` | Catálogo de produtos e regras |
+| `POST /quote` | Cálculo autoritativo da cotação |
 
-Não precisa ser bonito. Um `.jsonl` cru, um `.md` com copy-paste ou uma lista de links
-públicos resolve — pode mandar o histórico como ele saiu.
+Por padrão, o serviço de cotação fornecido pelo desafio simula 20% de falhas, 10% de respostas lentas e um atraso de oito segundos nas respostas lentas.
 
-> ⚠️ **Tire os seus segredos antes de commitar** (API keys, tokens, dados pessoais seus).
-> Isso vai pra um repo público.
+Uma resposta bem-sucedida de `/health` não garante que a próxima cotação será concluída com sucesso.
 
-Se a exportação não for viável na sua ferramenta, **avise antes de entregar** — a gente
-combina uma sessão de tela compartilhada pra você mostrar o passo a passo, e está tudo certo.
+### 4. Executar o agente interativo
 
----
+```powershell
+uv run --locked --env-file .env python -m autoseguro.cli
+```
 
-## Como a gente vai olhar
+A CLI preserva o estado da conversa durante a execução do processo.
 
-Sem pegadinha escondida na avaliação — o que importa:
+Exemplo de interação:
 
-- **Funciona de ponta a ponta?** O agente cota certo e não quebra no caminho feliz.
-- **O que ele faz quando a `/quote` falha?** (esse é o ponto que mais separa.)
-- **O critério de passar pro humano é explícito e defensável?**
-- **Dá pra rastrear o que aconteceu?** (cada mensagem/cotação, com id e status.)
-- **Cuidado com dados sensíveis.** O histórico tem informação pessoal — pense nisso.
-- **Qualidade:** outro engenheiro consegue pegar seu código e entender as decisões?
-- **Como você usou a IA.** Os `ai-logs/` entram na avaliação junto com o código.
+```text
+Usuário: Quero cotar um seguro para meu carro.
 
-> 💡 Não existe "formato de saída certo" definido de propósito. Queremos ver **a sua decisão** de engenharia.
+Usuário: Tenho 35 anos e meu carro é de 2022.
 
----
+Usuário: Meu CEP é 01310-100, quero o plano completo.
 
-## Entrega
+Usuário: Na verdade, meu carro é de 2020.
 
-Mande o link do repo público — com o código **e** a pasta `ai-logs/`.
-Qualquer dúvida, fale com quem te enviou o desafio.
-Quando começar, **avise** — a gente marca a conversa de feedback logo depois da entrega.
+Usuário: Quero falar com um atendente humano.
+```
 
-Boa! 🚀
+O agente solicita informações ausentes, obtém cotações pela API, invalida cotações anteriores após correções e registra solicitações de handoff.
+
+Digite `sair` para encerrar.
+
+A CLI não possui integração com o WhatsApp nem encaminha efetivamente solicitações a atendentes humanos.
+
+## Qualificação determinística
+
+A aplicação exige as seguintes informações antes de solicitar uma cotação:
+
+- Plano selecionado, validado contra o catálogo da API.
+- Idade do cliente.
+- Ano-modelo do veículo.
+- CEP brasileiro válido, contendo oito dígitos.
+
+O campo `data_inicio` é opcional.
+
+Embora o CEP seja opcional na API fornecida, sua presença é obrigatória na aplicação, pois a região pode alterar o preço do seguro.
+
+A qualificação local verifica a completude e o formato das informações. A elegibilidade comercial é determinada exclusivamente pela API de cotação.
+
+A aplicação nunca calcula o preço do seguro com base no dataset, no preço-base do plano ou em informações geradas pelo LLM.
+
+## Integração de cotação e tratamento de falhas
+
+O cliente HTTP valida as respostas da API utilizando Pydantic.
+
+| Condição | Política |
+|---|---|
+| HTTP 200 com cotação válida | Aceitar e apresentar a cotação |
+| HTTP 422 — recusa comercial | Explicar a recusa, sem retry ou handoff automático |
+| HTTP 422 — erro de validação de schema | Erro de integração, sem retry |
+| HTTP 400 — payload inválido | Erro de integração, sem retry |
+| HTTP 500/502/503/504 | Aplicar retry |
+| Falha de conexão ou transporte | Aplicar retry |
+| Timeout | Aplicar retry |
+| HTTP 200 com resposta inválida | Rejeitar a resposta, sem fabricar uma cotação |
+
+Configuração de retry:
+
+- Máximo de três tentativas, incluindo a solicitação inicial.
+- Backoff exponencial: 250 ms e, em seguida, 500 ms.
+- Timeout de conexão: 1 segundo.
+- Timeout de leitura: 2,5 segundos.
+- Timeouts de escrita e pool: 2 segundos cada.
+
+Os timeouts são aplicados individualmente às fases de I/O. Não existe um deadline global rígido para a operação.
+
+Essas configurações de retry são aplicadas a `POST /quote`. A consulta ao catálogo utiliza uma requisição separada, sem o mesmo mecanismo de retry.
+
+A repetição de solicitações é adequada ao endpoint de cotação simulado neste desafio, que não possui efeitos colaterais. Em uma operação de produção com efeitos colaterais, seriam necessárias garantias adicionais de idempotência.
+
+## Política de handoff
+
+| Código de motivo | Condição |
+|---|---|
+| `user_request` | Solicitação explícita de atendimento humano |
+| `quote_unavailable` | Esgotamento dos retries de cotação |
+| `catalog_unavailable` | Indisponibilidade do catálogo de produtos |
+| `integration_error` | Resposta inválida ou inesperada da integração |
+| `out_of_scope` | Solicitação fora do escopo do workflow de cotação |
+
+O handoff representa um estado registrado no sistema, não uma transferência efetivamente realizada para uma pessoa.
+
+Recusas comerciais são distintas de falhas operacionais e não provocam handoff automático.
+
+Depois de registrado, o handoff permanece ativo durante a conversa. A resolução por um atendente humano e a redistribuição do atendimento estão fora do escopo deste MVP.
+
+## Consistência das cotações
+
+Uma cotação bem-sucedida somente pode ser reutilizada quando os dados normalizados da solicitação permanecem inalterados.
+
+Mudanças na idade, no ano do veículo, no plano, no CEP ou na data de início invalidam a cotação ativa anterior.
+
+Correções ambíguas ou inválidas exigem esclarecimento antes da emissão de uma nova cotação. Campos não mencionados nas mensagens posteriores preservam seus valores anteriores.
+
+O prêmio mensal, a franquia, as coberturas, as carências e o primeiro pagamento proporcional, quando retornado, são apresentados a partir da resposta validada da API.
+
+## Testes automatizados
+
+Execute a suíte completa:
+
+```powershell
+uv run --locked pytest -q
+```
+
+Verifique a sintaxe dos módulos:
+
+```powershell
+uv run --locked python -m compileall -q .\autoseguro .\scripts .\tests
+```
+
+Os testes abrangem:
+
+- Normalização dos dados do lead e atualizações incrementais.
+- Qualificação e invalidação de cotações.
+- Classificação de respostas HTTP e erros de integração.
+- Retries, timeouts e recuperação de falhas.
+- Transições determinísticas do LangGraph.
+- Comportamento conversacional multi-turno.
+- Preservação de estado na CLI.
+- Auditoria JSONL, sanitização e geração de evidências.
+
+A suíte utiliza test doubles e mocks HTTP, sem exigir acesso à OpenAI ou ao Docker.
+
+Ao final da implementação, foram reportados 97 testes aprovados no ambiente local. Execute novamente o comando acima para verificar a versão submetida.
+
+## Reprodução da evidência de execução real
+
+Inicie o serviço Docker e configure a OpenAI conforme as instruções anteriores.
+
+Execute:
+
+```powershell
+uv run --locked --env-file .env python -m scripts.demo_conversation
+```
+
+O script realiza chamadas reais para extração semântica e cotação, registrando os resultados em:
+
+```text
+evidence/demo_conversation.jsonl
+```
+
+A demonstração percorre:
+
+1. Solicitação inicial de seguro.
+2. Coleta incremental das informações do cliente.
+3. Primeira cotação bem-sucedida.
+4. Correção das informações do veículo e obtenção de uma segunda cotação.
+5. Solicitação explícita de atendimento humano.
+
+A evidência contém as mensagens de entrada, respostas, identificadores de cotação, resultados e transições de estado efetivamente produzidos durante a execução.
+
+Eventuais falhas permanecem registradas. O script não fabrica resultados bem-sucedidos.
+
+O serviço foi projetado para apresentar instabilidade. Uma execução malsucedida pode ser analisada e repetida, mas somente uma execução realmente concluída deve ser apresentada como evidência de sucesso.
+
+**Atenção:** o script de demonstração reinicializa o arquivo de evidência a cada execução. Revise e preserve uma execução validada antes de executá-lo novamente.
+
+## Observabilidade
+
+Os registros operacionais são armazenados em:
+
+```text
+logs/operational.jsonl
+```
+
+Eles incluem:
+
+- IDs de eventos, conversas, turnos e mensagens.
+- Status de processamento das mensagens.
+- IDs de cotação, códigos HTTP, números das tentativas e latências.
+- Resultados da qualificação e decisões do workflow.
+- Status das cotações e dos handoffs, incluindo códigos de motivo.
+
+Cadeia de correlação:
+
+```text
+conversation_id -> turn_id -> quote_id -> attempt_number
+```
+
+Os logs operacionais não armazenam o conteúdo integral das mensagens, dados pessoais do cliente, credenciais ou valores comerciais.
+
+As evidências sintéticas de demonstração são armazenadas separadamente e podem conter as mensagens da conversa e os payloads da API utilizados na execução.
+
+Os logs operacionais e os dados locais processados são ignorados pelo Git. Somente evidências sintéticas revisadas devem ser incluídas nos commits.
+
+## Dataset e privacidade
+
+O dataset fornecido foi inspecionado antes da implementação:
+
+- 2.500 conversas.
+- 26.470 mensagens.
+- 1.789 marcadores de mídia sem conteúdo multimodal utilizável.
+- Ausência de índices de mensagens duplicados ou faltantes nas conversas inspecionadas.
+- Inversões temporais na maioria das conversas.
+
+A reconstrução das conversas deve, portanto, utilizar `message_index`, e não exclusivamente os timestamps.
+
+As colunas auxiliares `conversation_outcome`, `lead_idade_informada` e `veiculo_texto` foram excluídas do contexto do agente, pois podem causar data leakage ao revelar informações que ainda não estavam disponíveis no respectivo turno da conversa.
+
+Para gerar uma versão local com minimização de dados:
+
+```powershell
+uv run --locked python -m scripts.sanitize_dataset
+```
+
+Arquivo produzido:
+
+```text
+local_data/conversations_sanitized.parquet
+```
+
+O dataset original não é modificado.
+
+A sanitização por regex contempla formatos comuns de CPF, email, telefone, CEP e placa de veículo. Entretanto, ela não garante anonimização: nomes, formatos incomuns e identificadores contextuais podem permanecer nos dados.
+
+O arquivo sanitizado não deve ser publicado sem revisão adicional.
+
+A integração com a OpenAI utiliza extração estruturada com `store=False`. Essa configuração não constitui garantia de retenção zero de dados pelo provedor. As mensagens atuais do usuário continuam sendo transmitidas à OpenAI para interpretação semântica.
+
+## Estrutura do projeto
+
+```text
+autoseguro/
+  cli.py                 # Interface interativa de terminal
+  conversation.py        # Integração multi-turno e respostas
+  extraction.py          # Extração estruturada com OpenAI
+  domain.py              # Modelos do lead e merge incremental
+  qualification.py       # Validação determinística dos dados
+  quote_contracts.py     # Contratos HTTP tipados
+  quote_client.py        # HTTP, classificação de erros e retry
+  state.py               # Estado da conversa
+  workflow.py            # Roteamento com LangGraph
+  observability.py       # Auditoria operacional e evidências
+
+scripts/
+  inspect_dataset.py
+  inspect_quote_api.py
+  sanitize_dataset.py
+  demo_conversation.py
+
+tests/                   # Testes automatizados
+dataset/                 # Dataset e dicionário fornecidos
+quote-service/           # API simulada fornecida
+docs/                    # Decisões arquiteturais
+evidence/                # Evidências sintéticas revisadas
+ai-logs/                 # Histórico de desenvolvimento com IA
+```
+
+## Escopo e limitações
+
+Este projeto é um MVP desenvolvido para um desafio técnico, não uma plataforma de seguros pronta para produção.
+
+Não foram implementados:
+
+- Integração real com WhatsApp.
+- CRM ou encaminhamento efetivo para atendentes humanos.
+- Emissão de apólices, cobrança ou contratação de cobertura.
+- Persistência das conversas entre reinicializações da CLI.
+- Autenticação, autorização ou gerenciamento de segredos em nível de produção.
+- Deadlines globais garantidos para as requisições.
+- Processamento multimodal real.
+- RAG, banco de dados vetorial, fine-tuning ou MCP.
+- Monitoramento centralizado e observabilidade de produção.
+
+A CLI mantém o estado da conversa ativa em memória. Os eventos de auditoria operacional são registrados localmente.
+
+O workflow é determinístico após a extração semântica, mas a qualidade da interpretação do LLM pode variar. Os testes verificam o comportamento da aplicação diante de extrações definidas; eles não estabelecem uma garantia estatística de acurácia do modelo.
+
+## Transparência no uso de IA
+
+As conversas de desenvolvimento e suas exportações estão organizadas em [`ai-logs/`](ai-logs/README.md).
+
+Esses registros documentam as decisões arquiteturais, as iterações de implementação, os testes e a revisão do código desenvolvido com assistência de IA.
+
+**Conversa de desenvolvimento no ChatGPT:**
+
+[Histórico de arquitetura, implementação, testes e preparação da entrega](https://chatgpt.com/share/6ac6ee58-ad28-83e8-8bfa-0f43687ff4f0)
+
+Credenciais e informações pessoais devem ser revisadas e removidas dos registros antes da publicação.
+
+## Referências
+
+- [Repositório original do desafio](https://github.com/namastexlabs/namastex-fde-challenge)
+- [Decisões arquiteturais](docs/architecture-decisions.md)
+- [Histórico de desenvolvimento com IA](ai-logs/README.md)
+- [Conversa de desenvolvimento no ChatGPT](https://chatgpt.com/share/6ac6ee58-ad28-83e8-8bfa-0f43687ff4f0)
+- [Evidência de execução](evidence/demo_conversation.jsonl)
