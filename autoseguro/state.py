@@ -1,5 +1,5 @@
 
-"""LangGraph-compatible state and quote invalidation."""
+"""Conversation state, incremental updates, and quote invalidation."""
 
 from enum import StrEnum
 from typing import Annotated, TypedDict
@@ -10,6 +10,7 @@ from langgraph.graph.message import add_messages
 
 from .domain import LeadPatch, LeadProfile, merge_lead
 from .qualification import QualificationResult, qualify
+from .quote_client import QuoteAttempt, ResultKind
 from .quote_contracts import (
     PlansResponse,
     QuoteRequest,
@@ -29,7 +30,16 @@ class QuoteStatus(StrEnum):
 class HandoffReason(StrEnum):
     USER_REQUEST = "user_request"
     QUOTE_UNAVAILABLE = "quote_unavailable"
+    CATALOG_UNAVAILABLE = "catalog_unavailable"
+    INTEGRATION_ERROR = "integration_error"
     OUT_OF_SCOPE = "out_of_scope"
+
+
+class TurnAction(StrEnum):
+    ASK_INPUT = "ask_input"
+    SHOW_QUOTE = "show_quote"
+    EXPLAIN_DECLINE = "explain_decline"
+    HANDOFF = "handoff"
 
 
 class ConversationState(TypedDict):
@@ -44,8 +54,16 @@ class ConversationState(TypedDict):
     quote_request: QuoteRequest | None
     quote_response: QuoteResponse | None
     quote_status: QuoteStatus
+    quote_attempts: tuple[QuoteAttempt, ...]
+    quote_error_kind: ResultKind | None
+    decline_reason: str | None
 
     handoff_reason: HandoffReason | None
+    next_action: TurnAction | None
+
+    # Inputs for the current turn; consumed by the ingest node.
+    pending_patch: LeadPatch | None
+    handoff_requested: bool
 
 
 def new_conversation_state() -> ConversationState:
@@ -59,7 +77,13 @@ def new_conversation_state() -> ConversationState:
         quote_request=None,
         quote_response=None,
         quote_status=QuoteStatus.NOT_REQUESTED,
+        quote_attempts=(),
+        quote_error_kind=None,
+        decline_reason=None,
         handoff_reason=None,
+        next_action=None,
+        pending_patch=None,
+        handoff_requested=False,
     )
 
 
@@ -67,7 +91,7 @@ def apply_lead_patch(
     state: ConversationState,
     patch: LeadPatch,
 ) -> dict:
-    """Return a state update without mutating the input."""
+    """Apply normalized changes without mutating the original state."""
 
     lead, changed = merge_lead(state["lead"], patch)
 
@@ -79,18 +103,23 @@ def apply_lead_patch(
         "qualification": None,
     }
 
+    # Every LeadProfile field can affect a quote or its conditions.
     if state["quote_status"] != QuoteStatus.NOT_REQUESTED:
         update.update(
             quote_id=None,
             quote_request=None,
             quote_response=None,
             quote_status=QuoteStatus.STALE,
+            quote_attempts=(),
+            quote_error_kind=None,
+            decline_reason=None,
         )
 
     return update
 
 
 def qualification_node(state: ConversationState) -> dict:
+    """Pure qualification node; no HTTP calls or LLM."""
     return {
         "qualification": qualify(
             state["lead"],
